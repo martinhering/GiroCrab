@@ -11,10 +11,10 @@ Consorsbank account yet unless the Status table says so.
 | Phase | Scope | State |
 | --- | --- | --- |
 | 0 | Research: which interfaces exist, what the FinTS code already covers | ✅ done 2026-11-11 |
-| 1 | Live test of the existing FinTS preset (login, cash account, Tagesgeld, depot) | ⬜ needs a Consorsbank account |
-| 2 | Consorsbank-specific FinTS fixes (see Gap analysis) | ⬜ |
-| 3 | Dedicated bank entry (display name, tint, preset note, user-ID hint) | ⬜ |
-| 4 | README/CONTRIBUTING: move from "Help wanted" to supported | ⬜ |
+| 1 | Live test of the existing FinTS preset (login, cash account, Tagesgeld, depot) | 🟡 2026-11-14: login, account list, HKSAL, HKKAZ (MT940, v7, 90 days, no TAN) and HKWPD (depot, 1 position) work; history is limited to 90 days by the bank (BPD `HIKAZS … 90:J:N`, `3997` beyond) |
+| 2 | Consorsbank-specific FinTS fixes (see Gap analysis) | 🟡 security profile + forced HKTAN done 2026-11-14 (both confirmed live); full KTI for BLZ 76030080 only (confirmed live 2026-11-14); typed TAN on fetch open |
+| 3 | Bank entry (name, tint, monogram, preset note, user-ID hint, search words) | ✅ done 2026-11-14 – without a dedicated `ConnectorKind`, see Change log |
+| 4 | README/CONTRIBUTING: move from "Help wanted" to supported | ✅ done 2026-11-14: `BANK_MATRIX` status `Verified`, README matrix regenerated (website `../girocrab.de` still to be synced) |
 
 ---
 
@@ -101,9 +101,9 @@ Unresolved; probably the wrong TAN source (old app). *(anecdotal)*
 | --- | --- | --- |
 | 1. codes on HKIDN | `BankReply::has`/`code` match over **all** HIRMG/HIRMS codes, not per segment reference | none |
 | 2. 3955 + 0030 together | `request()` checks `3955`/`3956` **before** `0030`; `challenge_from` likewise | none |
-| 3. PIN:2 | HNSHK is built with `PIN:2` (lines ~340, ~371) | none |
-| 4. full KTI | `kti()` sends `IBAN:BIC` when an IBAN exists | send the full form `IBAN:BIC:Konto:Unterkonto:280:BLZ` always (the DEG allows it; harmless for other banks – verify with Sparda/DKB) |
-| 5. 9075 on HKKAZ | `request()` adds HKTAN process 4 only when `tan_required[seg] == true` from HIPINS | generic: on `9075` (and `9010`?) retry once with HKTAN process 4; or per-BLZ override set `{HKKAZ, HKSAL, HKCAZ, HKWPD}` for 76030080 |
+| 3. PIN:2 | **Was wrong for the sync dialog:** `PIN:2` was sent with security function `999` too. First live attempt (2026-11-14) failed with `9800` / `9010 Ungültiger Signaturaufbau: Fehler im Segmentaufbau` at message level. | ✅ `security_profile()`: `PIN:1` for `999`, `PIN:2` for two-step (as hbci4j does) |
+| 4. full KTI | `kti()` sends `IBAN:BIC` when an IBAN exists | ✅ `kti()` sends the full form `IBAN:BIC:Konto:Unterkonto:280:BLZ` for BLZ 76030080 only (other banks unchanged until verified). Live: HKKAZ+HKTAN with IBAN:BIC got `9050` + `9010` on the HKKAZ segment. |
+| 5. 9075 on HKKAZ | `request()` adds HKTAN process 4 only when `tan_required[seg] == true` from HIPINS | ✅ `needs_hktan()`: per-BLZ override `{HKKAZ, HKSAL}` for 76030080 (the set python-fints confirmed live). HKCAZ/HKWPD follow HIPINS until the live test says otherwise. |
 | Login with typed app TAN (`0030`, no image) | `challenge_from` builds a `Code` challenge | none, but UI wording: "TAN aus der Consorsbank App eingeben" |
 | **Fetch needs a typed TAN** (`0030` on HKKAZ with method 901) | `request()` returns an **error** on `0030` ("bitte Push-Verfahren verwenden") | **Open question.** If Consorsbank answers HKKAZ+HKTAN with `0030` (typed TAN) rather than `3955` (push), fetch cannot complete today. Needs the live test. If so: support a mid-fetch `Code` challenge, or rely on the 90-day window ("Tage beim ersten Abruf" ≤ 90, PSD2 exemption) which the error message already suggests. |
 | Depot (Kontoart 30–39) | HKWPD page loop + MT535 parser exist | live test only |
@@ -178,3 +178,32 @@ the typed-TAN-on-fetch case.
 ## Change log
 
 - 2026-11-11 – Research written: FinTS is the only viable route; gap analysis against the existing FinTS connector; phased plan.
+- 2026-11-14: First live attempt failed during login with `9800` / `9010 Ungültiger
+  Signaturaufbau: Fehler im Segmentaufbau` (message level). Fix: HNSHK/HNVSK security
+  profile `PIN:1` for the one-step sync dialog (`999`), `PIN:2` otherwise. Also forced
+  HKTAN process 4 for HKKAZ/HKSAL at BLZ 76030080 (quirk 5). Added a step trace
+  (`fints msg: …`, segment names + codes only) to the `GIROCRAB_DEPOT_DEBUG=1` log.
+  Not yet re-tested live.
+- 2026-11-14: Live results. Login needs the user ID `<10-digit account number>001`
+  (anything else → `9942 PIN ungültig`). With `PIN:1` the sync dialog passes; dialog
+  init with method 901 answered `3076` (no SCA) on HKIDN. HKSPA, HKWPD (depot, MT535,
+  1 position) and HKSAL+HKTAN (`3076`) work. HKKAZ+HKTAN was rejected with `9050` +
+  `9010` on the HKKAZ segment → full KTI for BLZ 76030080. Trace now also logs segment
+  versions and the bank's error texts.
+- 2026-11-14: Full KTI confirmed live: HKKAZ v7 + HKTAN answers `0020` / `3076` (no SCA)
+  for the default 90-day window; bookings arrive. A request reaching further back (tried
+  with a temporary one-off backfill, since removed) gets no TAN request either, but
+  `3997 Der Auftrag wurde nur teilweise ausgeführt.` and nothing older than about 90 days.
+  Answers open questions 1 and 2. The sync reports such a partial delivery per account.
+- 2026-11-14: The 90-day limit is the bank's: BPD `HIKAZS` v6/v7 advertise a storage
+  period of 90 days (`90:J:N`). Activating the Personal-Finance-Manager in online banking
+  made no difference for FinTS.
+- 2026-11-14: Phase 3 and 4. No dedicated `ConnectorKind`: FinTS banks are generic
+  `fints:<blz>` connections today (a test pins `fints:76030080` to `FinTsGeneric`), so the
+  entry is data on top of that: preset note and add-form hint for the user ID
+  (`<10-digit account number>001`), "tested" note in the bank search, search words
+  `dab` / `bnp paribas`, tint and monogram "CB" by BLZ (`BankConnection.tint` /
+  `.monogram`). `BANK_MATRIX` lists Consorsbank as verified (README DE/EN regenerated
+  with `scripts/sync_docs.py`).
+- Still open: login with a typed app TAN (`0030`) and transfers have not been exercised
+  live; today every login was SCA-exempt (`3076`).
